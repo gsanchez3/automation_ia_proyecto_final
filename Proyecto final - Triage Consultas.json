@@ -1,0 +1,654 @@
+{
+  "name": "Proyecto final - Triage Consultas",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "sender": "guidosanchez.n8n@gmail.com"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "id": "887999ef-9728-4fe0-bb42-cabf99bbba34",
+      "name": "Trigger - Consulta entrante",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "lOKYy2saifa0pPDN",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "513b865b-4eea-43c7-af51-3f03f3af5ecb",
+              "name": "asunto",
+              "value": "={{ $json.subject || \"(sin asunto)\" }}",
+              "type": "string"
+            },
+            {
+              "id": "a167fee6-8a30-4ff5-9b5d-4a49d9e1be26",
+              "name": "remitente",
+              "value": "={{ $json.from?.value?.[0]?.address || \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "453aaeea-8e9e-4e29-b929-94e853f33e76",
+              "name": "cuerpo",
+              "value": "={{ ($json.text || $json.snippet || \"\").replace(/\\s+/g, \" \").trim().slice(0, 4000) }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        208,
+        0
+      ],
+      "id": "bcb1ad3f-42e3-4db1-ba98-15d331523c30",
+      "name": "Normaliza datos del mail"
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "dataSourceId": {
+          "__rl": true,
+          "value": "3bfa0733-e0ae-8020-a373-000b5c41513b",
+          "mode": "list",
+          "cachedResultName": "Base de conocimiento",
+          "cachedResultUrl": "https://app.notion.com/p/3bfa0733e0ae80c296e8f600519a9861"
+        },
+        "limit": 20,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 3,
+      "position": [
+        416,
+        0
+      ],
+      "id": "38687646-5954-4fce-8a1d-60f0ad96a237",
+      "name": "Lee base de conocimiento",
+      "credentials": {
+        "notionApi": {
+          "id": "clWgkp31wF5CLrvI",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxRetries": 3
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatCohere",
+      "typeVersion": 1,
+      "position": [
+        832,
+        240
+      ],
+      "id": "4e880134-f29e-4345-a6b6-41c37c96e7eb",
+      "name": "Cohere Chat Model",
+      "credentials": {
+        "cohereApi": {
+          "id": "4l9ub6R1SnBmyCtc",
+          "name": "Cohere account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"tema\": \"Regimen de promocion\",\n  \"urgencia\": \"Media\",\n  \"area_responsable\": \"Direccion nacional de inversiones y desarrollo industrial\",\n  \"codigo_ficha\": \"REG-001\",\n  \"tipo_resolucion\": \"Responde IA\",\n  \"borrador\": \"Estimados, en respuesta a su consulta...\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        976,
+        208
+      ],
+      "id": "cc061772-6178-4d46-9bc1-010947fd039a",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Sos un asistente de la Secretaria de Industria y Comercio de Argentina. Tu tarea es clasificar una consulta de una empresa y redactar un borrador de respuesta.\n\n=== BASE DE CONOCIMIENTO DISPONIBLE ===\n{{ $('Lee base de conocimiento').all().map(f => `[${f.json.property_codigo}] ${f.json.property_nombre}\nTipo: ${f.json.property_tipo}\nArea responsable: ${f.json.property_area_responsable}\nRequiere revision humana: ${f.json.property_requiere_revision_humana}\nResumen: ${f.json.property_resumen}\nRequisitos: ${f.json.property_requisitos}`).join('\\n\\n') }}\n\n=== CONSULTA RECIBIDA ===\nAsunto: {{ $('Normaliza datos del mail').first().json.asunto }}\nRemitente: {{ $('Normaliza datos del mail').first().json.remitente }}\nCuerpo: {{ $('Normaliza datos del mail').first().json.cuerpo }}\n\n=== VOCABULARIOS CERRADOS ===\ntema (elegi exactamente uno):\nRegimen de promocion | Aranceles | Reglamentos tecnicos | Tramites\n\narea_responsable (segun el tema elegido):\nRegimen de promocion -> Direccion nacional de inversiones y desarrollo industrial\nAranceles -> Direccion nacional de politica comercial externa\nReglamentos tecnicos -> Direccion nacional de reglamentos tecnicos y promocion de la calidad\nTramites -> Coordinacion de gestion documental y despacho\n\nurgencia: Alta | Media | Baja\ntipo_resolucion: Responde IA | Requiere humano | Solicita aclaracion\n\n=== REGLAS DE DERIVACION ===\n0. Si la consulta no contiene informacion suficiente para identificar de que tema se trata (mensaje muy corto, vago o sin datos concretos), tipo_resolucion = \"Solicita aclaracion\", codigo_ficha = \"\", y tema/area_responsable los completas con tu mejor estimacion.\n1. Si ninguna ficha de la base de conocimiento cubre el tema de la consulta, tipo_resolucion = \"Requiere humano\" y codigo_ficha = \"\".\n2. Si la ficha que corresponde tiene \"Requiere revision humana: true\", tipo_resolucion = \"Requiere humano\" obligatoriamente, aunque tengas la informacion.\n3. Si la consulta pide una excepcion, una interpretacion, un plazo especial, o menciona un expediente o tramite en curso, tipo_resolucion = \"Requiere humano\".\n4. Ante cualquier duda, tipo_resolucion = \"Requiere humano\".\n\n=== COMO REDACTAR EL BORRADOR ===\nSi tipo_resolucion = \"Solicita aclaracion\":\nRedacta un pedido breve y cordial de mas informacion. Indica que necesitas conocer el tema especifico de la consulta (regimen, tramite, reglamento o posicion arancelaria) para poder orientar la respuesta. No cites normativa ni enumeres requisitos.\n\nSi tipo_resolucion = \"Responde IA\":\nRedacta una respuesta completa y profesional usando UNICAMENTE la informacion de la ficha elegida. Cita el nombre del regimen o reglamento y la resolucion correspondiente. Enumera los requisitos que apliquen. No inventes datos, plazos ni normativa que no esten en la ficha.\n\nSi tipo_resolucion = \"Requiere humano\":\nRedacta SOLO un acuse de recibo breve. Deci que la consulta fue recibida, que por sus caracteristicas requiere revision del equipo tecnico del area responsable, y que se respondera desde esta casilla en los proximos dias habiles. NO cites normativa, NO enumeres requisitos, NO prometas plazos concretos.\n\nEn ambos casos: tono formal pero cercano, en castellano rioplatense, sin corchetes ni espacios para completar. Maximo 1200 caracteres. Firma como \"Secretaria de Industria y Comercio\".\n\nFormato obligatorio del borrador: linea de saludo, luego UNA LINEA EN BLANCO, luego el cuerpo, luego UNA LINEA EN BLANCO, luego \"Saludos cordiales,\" y en la linea siguiente \"Secretaria de Industria y Comercio\".\nEl campo borrador no debe superar los 1200 caracteres bajo ninguna circunstancia.",
+        "hasOutputParser": true,
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        832,
+        0
+      ],
+      "id": "8c5b174e-c8fa-4931-95df-33a8c3f1c981",
+      "name": "Clasifica y redacta borrador",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "dataSourceId": {
+          "__rl": true,
+          "value": "3bfa0733-e0ae-8090-a74c-000bcc60cc00",
+          "mode": "list",
+          "cachedResultName": "Consultas",
+          "cachedResultUrl": "https://app.notion.com/p/3bfa0733e0ae80068cd8e562250b48f1"
+        },
+        "title": "={{ ($('Normaliza datos del mail').first().json.asunto || \"(sin asunto)\").slice(0, 1900) }}",
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Remitente|email",
+              "emailValue": "={{ $('Normaliza datos del mail').first().json.remitente }}"
+            },
+            {
+              "key": "Consulta original|rich_text",
+              "textContent": "={{ ($('Trigger - Consulta entrante').first().json.text || \"\").slice(0, 1900) }}"
+            },
+            {
+              "key": "Tema|select",
+              "selectValue": "={{ $json.output.tema }}"
+            },
+            {
+              "key": "Urgencia|select",
+              "selectValue": "={{ $json.output.urgencia }}"
+            },
+            {
+              "key": "Area responsable|select",
+              "selectValue": "={{ $json.output.area_responsable }}"
+            },
+            {
+              "key": "Codigo ficha|rich_text",
+              "textContent": "={{ $json.output.codigo_ficha }}"
+            },
+            {
+              "key": "Tipo de resolucion|select",
+              "selectValue": "={{ $json.output.tipo_resolucion }}"
+            },
+            {
+              "key": "Borrador respuesta|rich_text",
+              "textContent": "={{ ($json.output.borrador || \"\").slice(0, 1900) }}"
+            },
+            {
+              "key": "Estado|status",
+              "statusValue": "Procesado por IA"
+            },
+            {
+              "key": "Resultado|select",
+              "selectValue": "=OK"
+            }
+          ]
+        },
+        "options": {},
+        "simple": false
+      },
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 3,
+      "position": [
+        1184,
+        -128
+      ],
+      "id": "d37b6dfd-aee7-4d0a-91b2-64610744cf8d",
+      "name": "Guarda consulta en Notion",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "notionApi": {
+          "id": "clWgkp31wF5CLrvI",
+          "name": "Notion account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "dataSourceId": {
+          "__rl": true,
+          "value": "3bfa0733-e0ae-8090-a74c-000bcc60cc00",
+          "mode": "list",
+          "cachedResultName": "Consultas",
+          "cachedResultUrl": "https://app.notion.com/p/3bfa0733e0ae80068cd8e562250b48f1"
+        },
+        "title": "={{ \"ERROR - \" + ($('Normaliza datos del mail').first().json.asunto || \"sin asunto\") }}",
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Remitente|email",
+              "emailValue": "={{ $('Normaliza datos del mail').first().json.remitente }}"
+            },
+            {
+              "key": "Consulta original|rich_text",
+              "textContent": "={{ ($('Normaliza datos del mail').first().json.cuerpo || \"\").slice(0, 1900) }}"
+            },
+            {
+              "key": "Estado|status",
+              "statusValue": "=Error"
+            },
+            {
+              "key": "Resultado|select",
+              "selectValue": "=Error"
+            },
+            {
+              "key": "Detalle error|rich_text",
+              "textContent": "={{ ($json.error?.message || $json.error?.description || $json.error?.error?.message || $json.error?.cause?.message || $json.message || \"Error sin detalle\").toString().slice(0, 1900) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 3,
+      "position": [
+        1504,
+        144
+      ],
+      "id": "0a46b0ce-c5a9-4389-baba-17b67000efb0",
+      "name": "Registra error en Notion",
+      "credentials": {
+        "notionApi": {
+          "id": "clWgkp31wF5CLrvI",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0BQEP191CG",
+          "mode": "list",
+          "cachedResultName": "todo-prueban8n"
+        },
+        "text": "={{ $json.properties[\"Tipo de resolucion\"].select.name == \"Requiere humano\" ? \"🔴 REQUIERE HUMANO\" : $json.properties[\"Tipo de resolucion\"].select.name == \"Solicita aclaracion\" ? \"🟡 FALTA INFORMACION\" : \"🟢 Borrador listo\" }}\n\n*{{ $json.properties.Asunto.title[0].plain_text }}*\nDe: {{ $json.properties.Remitente.email }}\nTema: {{ $json.properties.Tema.select.name }} | Urgencia: {{ $json.properties.Urgencia.select.name }}\nArea: {{ $json.properties[\"Area responsable\"].select.name }}\nFicha: {{ $json.properties[\"Codigo ficha\"].rich_text[0]?.plain_text || \"ninguna\" }}\n\nRevisar y aprobar: {{ $json.url }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.5,
+      "position": [
+        1504,
+        -160
+      ],
+      "id": "90b9459f-9680-4472-a1bf-7ac83c6c5d65",
+      "name": "Avisa revision por Slack",
+      "webhookId": "22a2817d-d394-422d-96a1-3f3910982e7e",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "8F3yAgMymuKO369r",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "event": "pagedUpdatedInDatabase",
+        "dataSourceId": {
+          "__rl": true,
+          "value": "3bfa0733-e0ae-8090-a74c-000bcc60cc00",
+          "mode": "list",
+          "cachedResultName": "Consultas",
+          "cachedResultUrl": "https://app.notion.com/p/3bfa0733e0ae80068cd8e562250b48f1"
+        }
+      },
+      "type": "n8n-nodes-base.notionTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        400
+      ],
+      "id": "5e8b852e-44c8-4f79-858e-7c2e344767db",
+      "name": "Trigger - Cambio de estado",
+      "credentials": {
+        "notionApi": {
+          "id": "clWgkp31wF5CLrvI",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "get",
+        "pageId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 3,
+      "position": [
+        208,
+        400
+      ],
+      "id": "aeb7b8af-93e0-455e-92f8-3032d1e9601c",
+      "name": "Lee la consulta completa",
+      "credentials": {
+        "notionApi": {
+          "id": "clWgkp31wF5CLrvI",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "1ece10c1-cca7-4ec1-916e-02d20d275a91",
+              "leftValue": "={{ $json.property_estado }}",
+              "rightValue": "Aprobado por Humano",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            },
+            {
+              "id": "572aaa28-0ca8-4c95-b293-2f0c11e0eef3",
+              "leftValue": "={{ $json.property_respuesta_enviada }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        416,
+        400
+      ],
+      "id": "176954d3-5d85-4965-94af-eb478e96bb1f",
+      "name": "Filtra aprobadas sin responder"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.property_remitente }}",
+        "subject": "=Re: {{ $json.property_asunto }}",
+        "emailType": "text",
+        "message": "={{ $json.property_borrador_respuesta }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        752,
+        384
+      ],
+      "id": "fab0e876-527c-4a85-9d8a-7d4f8f8340f9",
+      "name": "Envia respuesta a la empresa",
+      "webhookId": "f1e87977-3d48-4bf9-b5a4-c37760310cf7",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "lOKYy2saifa0pPDN",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        624,
+        0
+      ],
+      "id": "033f9602-f6cb-4eee-a0b9-36de6d8c004b",
+      "name": "Vuelve a un solo item"
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": {
+          "__rl": true,
+          "value": "={{ $('Lee la consulta completa').first().json.id }}",
+          "mode": "id"
+        },
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Estado|status",
+              "statusValue": "Finalizado"
+            },
+            {
+              "key": "Respuesta enviada|checkbox",
+              "checkboxValue": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 3,
+      "position": [
+        960,
+        384
+      ],
+      "id": "356f5302-be56-4115-99b3-a83cf70d4fbb",
+      "name": "Marca finalizado en Notion",
+      "credentials": {
+        "notionApi": {
+          "id": "clWgkp31wF5CLrvI",
+          "name": "Notion account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Trigger - Consulta entrante": {
+      "main": [
+        [
+          {
+            "node": "Normaliza datos del mail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normaliza datos del mail": {
+      "main": [
+        [
+          {
+            "node": "Lee base de conocimiento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lee base de conocimiento": {
+      "main": [
+        [
+          {
+            "node": "Vuelve a un solo item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cohere Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Clasifica y redacta borrador",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Clasifica y redacta borrador",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clasifica y redacta borrador": {
+      "main": [
+        [
+          {
+            "node": "Guarda consulta en Notion",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registra error en Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guarda consulta en Notion": {
+      "main": [
+        [
+          {
+            "node": "Avisa revision por Slack",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registra error en Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger - Cambio de estado": {
+      "main": [
+        [
+          {
+            "node": "Lee la consulta completa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lee la consulta completa": {
+      "main": [
+        [
+          {
+            "node": "Filtra aprobadas sin responder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtra aprobadas sin responder": {
+      "main": [
+        [
+          {
+            "node": "Envia respuesta a la empresa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Envia respuesta a la empresa": {
+      "main": [
+        [
+          {
+            "node": "Marca finalizado en Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vuelve a un solo item": {
+      "main": [
+        [
+          {
+            "node": "Clasifica y redacta borrador",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "41798348-9ad2-4260-acc6-0db8bb77a6ed",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "fd0207f4202091564fa28e5aedce6944d4bfa8c568ec5c47e2f01a2c9c7c9ca4"
+  },
+  "nodeGroups": [],
+  "id": "GYOzwUhLthQpYaH5",
+  "tags": []
+}
